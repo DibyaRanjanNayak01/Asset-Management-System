@@ -20,9 +20,11 @@ app.use(express.urlencoded({ extended: true }));
 
 // Allow React Frontend
 app.use(cors({
-    origin: 'http://localhost:5173', // Vite
+  origin: [
+    'http://localhost:5173',
+    'https://asset-management-system-topaz-three.vercel.app/'
+  ]
 }));
-
 
 const dashboardRouter = require('./routes/dashboardRouter');
 const assetRouter = require('./routes/assetRouter');
@@ -62,9 +64,15 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 //         store: store,
 //     })
 // );
-app.use((req,res)=>{
-    console.log(req.url);
-})
+// app.use((req,res)=>{
+//     console.log(req.url);
+// })
+
+app.get("/", (req, res) => {
+    res.send("AMS Backend Running");
+});
+
 app.listen((process.env.PORT || 3000),()=>{
     console.log("Server running on port",process.env.PORT);
 })
+

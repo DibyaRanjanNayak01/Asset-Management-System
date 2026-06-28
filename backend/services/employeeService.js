@@ -9,7 +9,7 @@ const {
 } = require('../utils/listQuery');
 
 const employeeListFields = 'name empId email designation department phone';
-const employeeDetailFields = 'name empId email designation department phone profilePic dateOfJoining';
+const employeeDetailFields = 'name empId email designation department phone profilePic idProofDoc dateOfJoining';
 const employeeSearchFields = ['empId', 'name', 'email', 'department'];
 const employeeSortFields = ['empId', 'name', 'email', 'designation', 'department', 'phone', 'createdAt'];
 
@@ -40,6 +40,32 @@ const formatHistoryAsset = (historyItem) => {
         remarks: historyItem.remarks,
         actionDate: historyItem.actionDate
     };
+};
+
+const getAssignedAssetCounts = async (employeeIds) => {
+    if (!employeeIds.length) {
+        return new Map();
+    }
+
+    const counts = await Asset.aggregate([
+        {
+            $match: {
+                assignedTo: { $in: employeeIds }
+            }
+        },
+        {
+            $group: {
+                _id: '$assignedTo',
+                assetCount: { $sum: 1 }
+            }
+        }
+    ]);
+
+    return new Map(
+        counts
+            .filter((item) => item._id)
+            .map((item) => [item._id.toString(), item.assetCount])
+    );
 };
 
 
@@ -81,6 +107,7 @@ const getAllEmployees = async (query = {}) => {
         employeeQuery.lean(),
         Employee.countDocuments(filter)
     ]);
+    const assetCountMap = await getAssignedAssetCounts(employees.map((employee) => employee._id));
 
     return {
         employees: employees.map((employee) => ({
@@ -90,7 +117,8 @@ const getAllEmployees = async (query = {}) => {
             phone: employee.phone,
             designation: employee.designation,
             department: employee.department,
-            empId: employee.empId
+            empId: employee.empId,
+            assetCount: assetCountMap.get(employee._id.toString()) || 0
         })),
         totalCount,
         pagination
