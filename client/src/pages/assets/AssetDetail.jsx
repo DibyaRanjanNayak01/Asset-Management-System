@@ -10,6 +10,16 @@ import {
   Trash2,
   Download,
   PackagePlus,
+  Search,
+  User,
+  Calendar,
+  MessageSquare,
+  Building2,
+  Phone,
+  ArrowUpRight,
+  ArrowDownLeft,
+  UserCheck,
+  PackageX,
 } from 'lucide-react';
 import {
   getAssetById,
@@ -30,9 +40,29 @@ import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import AssetForm from './AssetForm';
-import { Card, CardHeader } from '../../components/ui/Form';
+import { Card, CardHeader, FormField, SelectInput, TextArea, TextInput } from '../../components/ui/Form';
 import { formatCurrency, formatDate } from '../../utils/helpers';
 import { useToast } from '../../context/ToastContext';
+
+const getTodayInputValue = () => new Date().toISOString().split('T')[0];
+
+const actionConfig = {
+  return: {
+    title: 'Return Asset',
+    submitLabel: 'Return Asset',
+    successMessage: 'Asset returned successfully',
+  },
+  maintenance: {
+    title: 'Start Maintenance',
+    submitLabel: 'Start Maintenance',
+    successMessage: 'Maintenance started successfully',
+  },
+  complete: {
+    title: 'Complete Maintenance',
+    submitLabel: 'Complete Maintenance',
+    successMessage: 'Maintenance completed successfully',
+  },
+};
 
 export default function AssetDetail() {
   const { id } = useParams();
@@ -50,8 +80,16 @@ export default function AssetDetail() {
   const [showEdit, setShowEdit] = useState(false);
   const [showDispose, setShowDispose] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
+  const [actionModal, setActionModal] = useState(null);
+  const [actionForm, setActionForm] = useState({
+    remarks: '',
+    actionDate: getTodayInputValue(),
+    vendor: '',
+  });
   const [qrDownloading, setQrDownloading] = useState(false);
   const [invoiceDownloading, setInvoiceDownloading] = useState(false);
+  const [empSearch, setEmpSearch] = useState('');
+  const [showAllEmployees, setShowAllEmployees] = useState(false);
 
   const loadAsset = () => {
     setLoading(true);
@@ -69,13 +107,29 @@ export default function AssetDetail() {
     loadAsset();
   }, [id]);
 
-  const handleAction = async (action) => {
+  const openActionModal = (action) => {
+    const assetVendorId = meta?.vendors?.find(
+      (vendor) => vendor.vendorName === data?.asset?.vendor?.vendorName
+    )?._id;
+
+    setActionForm({
+      remarks: '',
+      actionDate: getTodayInputValue(),
+      vendor: action === 'maintenance' ? assetVendorId || '' : '',
+    });
+    setActionModal(action);
+  };
+
+  const handleAction = async () => {
+    if (!actionModal) return;
+
     setActionLoading(true);
     try {
-      if (action === 'return') await returnAsset(data.asset._id);
-      if (action === 'maintenance') await startMaintenance(data.asset._id);
-      if (action === 'complete') await completeMaintenance(data.asset._id);
-      showToast('Action completed successfully', 'success');
+      if (actionModal === 'return') await returnAsset(data.asset._id, actionForm);
+      if (actionModal === 'maintenance') await startMaintenance(data.asset._id, actionForm);
+      if (actionModal === 'complete') await completeMaintenance(data.asset._id, actionForm);
+      showToast(actionConfig[actionModal].successMessage, 'success');
+      setActionModal(null);
       loadAsset();
     } catch (error) {
       showToast(error.message, 'error');
@@ -109,6 +163,8 @@ export default function AssetDetail() {
       showToast('Asset assigned successfully', 'success');
       setShowAssign(false);
       setSelectedEmployeeId('');
+      setEmpSearch('');
+      setShowAllEmployees(false);
       loadAsset();
     } catch (error) {
       showToast(error.message, 'error');
@@ -118,6 +174,11 @@ export default function AssetDetail() {
   };
 
   const handleDispose = async () => {
+    if (data.asset.assignedTo || data.asset.status !== 'Available') {
+      showToast('Only unassigned available assets can be disposed. Return the asset before disposing it.', 'error');
+      return;
+    }
+
     setDisposeLoading(true);
     try {
       await disposeAsset(id);
@@ -175,6 +236,7 @@ export default function AssetDetail() {
   const { asset, assignedHistory, maintenanceHistory } = data;
   const status = asset.status;
   const warranty = getWarrantySummary(asset.warrantyExpiry);
+  const canDispose = !asset.assignedTo && status === 'Available';
 
   const editValues = {
     assetName: asset.assetName || '',
@@ -219,18 +281,18 @@ export default function AssetDetail() {
           )}
           {status === 'Assigned' && (
             <>
-              <Button variant="secondary" loading={actionLoading} onClick={() => handleAction('return')}>
+              <Button variant="secondary" onClick={() => openActionModal('return')}>
                 <RotateCcw className="h-4 w-4" />
                 Return
               </Button>
-              <Button variant="secondary" loading={actionLoading} onClick={() => handleAction('maintenance')}>
+              <Button variant="secondary" onClick={() => openActionModal('maintenance')}>
                 <Wrench className="h-4 w-4" />
                 Start Maintenance
               </Button>
             </>
           )}
           {status === 'Maintenance' && (
-            <Button loading={actionLoading} onClick={() => handleAction('complete')}>
+            <Button onClick={() => openActionModal('complete')}>
               <CheckCircle2 className="h-4 w-4" />
               Complete Maintenance
             </Button>
@@ -358,8 +420,8 @@ export default function AssetDetail() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <HistoryCard title="Assignment History" items={assignedHistory} />
-        <HistoryCard title="Maintenance History" items={maintenanceHistory} />
+        <AssignmentHistoryCard items={assignedHistory} />
+        <MaintenanceHistoryCard items={maintenanceHistory} />
       </div>
 
       <Modal open={showEdit} onClose={() => setShowEdit(false)} title="Edit Asset" size="lg">
@@ -378,48 +440,187 @@ export default function AssetDetail() {
         />
       </Modal>
 
-      <Modal open={showAssign} onClose={() => setShowAssign(false)} title="Assign Asset" size="md">
+      <Modal
+        open={showAssign}
+        onClose={() => { setShowAssign(false); setEmpSearch(''); setShowAllEmployees(false); }}
+        title="Assign Asset"
+        size="md"
+      >
         {!employees.length ? (
           <p className="text-sm text-slate-500">No employees available to assign.</p>
-        ) : (
-          <div className="space-y-4">
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-slate-700">Employee</span>
-              <select
-                value={selectedEmployeeId}
-                onChange={(event) => setSelectedEmployeeId(event.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-brand-500 focus:ring-4 focus:ring-brand-100"
+        ) : (() => {
+          const PAGE = 6;
+          const q = empSearch.toLowerCase();
+          const filtered = employees.filter((e) =>
+            e.name?.toLowerCase().includes(q) ||
+            e.empId?.toLowerCase().includes(q) ||
+            (e.department || '').toLowerCase().includes(q)
+          );
+          const visible = showAllEmployees ? filtered : filtered.slice(0, PAGE);
+          const hasMore = filtered.length > PAGE;
+
+          return (
+            <div className="space-y-3">
+              {/* Search bar */}
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search employee by name, ID or department..."
+                  value={empSearch}
+                  onChange={(e) => { setEmpSearch(e.target.value); setShowAllEmployees(false); }}
+                  className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-4 text-sm text-slate-800 outline-none transition focus:border-brand-500 focus:ring-4 focus:ring-brand-100"
+                />
+              </div>
+
+              {/* Count line */}
+              <p className="text-xs text-slate-400">
+                {filtered.length} employee{filtered.length !== 1 ? 's' : ''} found
+              </p>
+
+              {/* Employee list */}
+              {filtered.length === 0 ? (
+                <div className="flex h-95 items-center justify-center text-sm text-slate-400">
+                  No employees match your search.
+                </div>
+              ) : (
+                <div className="h-95 overflow-y-auto pr-1 space-y-2">
+                  {visible.map((employee) => {
+                    const isSelected = selectedEmployeeId === employee._id;
+                    return (
+                      <button
+                        key={employee._id}
+                        type="button"
+                        onClick={() => setSelectedEmployeeId(isSelected ? '' : employee._id)}
+                        className={`flex w-full cursor-pointer items-center gap-4 rounded-xl border p-3.5 text-left transition ${
+                          isSelected
+                            ? 'border-brand-500 bg-brand-50'
+                            : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          checked={isSelected}
+                          readOnly
+                          className="h-4 w-4 border-slate-300 text-brand-700 focus:ring-brand-500"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-slate-900 truncate">{employee.name}</p>
+                          <p className="text-xs text-slate-500 truncate">
+                            {employee.empId} · {employee.department || 'No Department'}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+
+                  {/* View more / less button */}
+                  {hasMore && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllEmployees((v) => !v)}
+                      className="w-full rounded-xl border border-dashed border-slate-300 py-2 text-xs font-medium text-slate-500 hover:border-brand-400 hover:text-brand-600 transition-colors"
+                    >
+                      {showAllEmployees
+                        ? 'Show less'
+                        : `View ${filtered.length - PAGE} more employee${filtered.length - PAGE !== 1 ? 's' : ''}`}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+        <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-4">
+          <span className="text-sm text-slate-400">
+            {selectedEmployeeId
+              ? `Selected: ${employees.find((e) => e._id === selectedEmployeeId)?.name || ''}`
+              : 'No employee selected'}
+          </span>
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => { setShowAssign(false); setEmpSearch(''); setShowAllEmployees(false); }}>
+              Cancel
+            </Button>
+            <Button loading={assignLoading} onClick={handleAssign}>
+              Assign
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(actionModal)}
+        onClose={() => setActionModal(null)}
+        title={actionModal ? actionConfig[actionModal].title : 'Asset Action'}
+        size="md"
+      >
+        <div className="space-y-4">
+          <FormField label="Action Date" required>
+            <TextInput
+              type="date"
+              value={actionForm.actionDate}
+              onChange={(event) =>
+                setActionForm((current) => ({ ...current, actionDate: event.target.value }))
+              }
+            />
+          </FormField>
+
+          {actionModal === 'maintenance' && (
+            <FormField label="Maintenance Vendor">
+              <SelectInput
+                value={actionForm.vendor}
+                onChange={(event) =>
+                  setActionForm((current) => ({ ...current, vendor: event.target.value }))
+                }
               >
-                <option value="">Select employee</option>
-                {employees.map((employee) => (
-                  <option key={employee._id} value={employee._id}>
-                    {employee.name} ({employee.empId})
+                <option value="">Select vendor</option>
+                {(meta?.vendors || []).map((vendor) => (
+                  <option key={vendor._id} value={vendor._id}>
+                    {vendor.vendorName}
                   </option>
                 ))}
-              </select>
-            </label>
-          </div>
-        )}
+              </SelectInput>
+            </FormField>
+          )}
+
+          <FormField label="Remarks">
+            <TextArea
+              rows={4}
+              value={actionForm.remarks}
+              onChange={(event) =>
+                setActionForm((current) => ({ ...current, remarks: event.target.value }))
+              }
+              placeholder="Add notes for this action"
+            />
+          </FormField>
+        </div>
+
         <div className="mt-6 flex justify-end gap-3 border-t border-slate-100 pt-4">
-          <Button variant="secondary" onClick={() => setShowAssign(false)}>
+          <Button variant="secondary" onClick={() => setActionModal(null)}>
             Cancel
           </Button>
-          <Button loading={assignLoading} onClick={handleAssign}>
-            Assign
+          <Button loading={actionLoading} onClick={handleAction}>
+            {actionModal ? actionConfig[actionModal].submitLabel : 'Submit'}
           </Button>
         </div>
       </Modal>
 
       <Modal open={showDispose} onClose={() => setShowDispose(false)} title="Dispose Asset" size="sm">
-        <p className="text-sm text-slate-600">
-          Are you sure you want to dispose <strong>{asset.assetName}</strong>? This will mark the
-          asset as disposed and remove any current assignment.
-        </p>
+        {canDispose ? (
+          <p className="text-sm text-slate-600">
+            Are you sure you want to dispose <strong>{asset.assetName}</strong>? This will mark the
+            asset as disposed.
+          </p>
+        ) : (
+          <p className="text-sm text-red-600">
+            Only unassigned available assets can be disposed. Return this asset before disposing it.
+          </p>
+        )}
         <div className="mt-6 flex justify-end gap-3">
           <Button variant="secondary" onClick={() => setShowDispose(false)}>
             Cancel
           </Button>
-          <Button variant="danger" loading={disposeLoading} onClick={handleDispose}>
+          <Button variant="danger" loading={disposeLoading} disabled={!canDispose} onClick={handleDispose}>
             Dispose Asset
           </Button>
         </div>
@@ -516,28 +717,125 @@ function getWarrantySummary(warrantyExpiry) {
   };
 }
 
-function HistoryCard({ title, items }) {
+function AssignmentHistoryCard({ items }) {
   return (
     <Card>
-      <CardHeader title={title} />
-      <div className="divide-y divide-slate-100">
+      <CardHeader title="Assignment History" subtitle={`${items?.length || 0} total assignments/returns`} />
+      <div className="p-5">
         {!items?.length ? (
-          <p className="p-5 text-sm text-slate-500">No history recorded yet.</p>
+          <p className="text-sm text-slate-500 py-4 text-center">No assignment history recorded yet.</p>
         ) : (
-          items.map((item, index) => (
-            <div key={index} className="flex items-start justify-between gap-4 p-5">
-              <div>
-                <p className="text-sm font-medium text-slate-900">
-                  {item.employee?.name || 'Unknown'}
-                </p>
-                <p className="text-xs text-slate-500">{item.employee?.empId}</p>
-              </div>
-              <div className="text-right">
-                <StatusBadge status={item.status} />
-                <p className="mt-1 text-xs text-slate-400">{formatDate(item.actionDate)}</p>
-              </div>
-            </div>
-          ))
+          <div className="space-y-3">
+            {items.map((item, index) => {
+              const isAssigned = item.status?.toLowerCase() === 'assigned';
+              const iconBg = isAssigned ? 'bg-emerald-100 text-emerald-600 border-emerald-200' : 'bg-slate-100 text-slate-500 border-slate-200';
+              const BulletIcon = isAssigned ? UserCheck : RotateCcw;
+              return (
+                <div key={index} className="flex gap-4 items-center bg-slate-50 border border-slate-100 rounded-xl p-3 hover:bg-slate-100/50 transition-colors">
+                  {/* Icon */}
+                  <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${iconBg}`}>
+                    <BulletIcon className="h-3.5 w-3.5" />
+                  </span>
+
+                  {/* Content column */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-bold text-slate-900 text-sm truncate">
+                          {item.employee?.name || 'Unknown Employee'}
+                        </span>
+                        {item.employee?.empId && (
+                          <span className="mt-0.5 inline-block rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 w-fit">
+                            {item.employee.empId}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <StatusBadge status={item.status} />
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded-lg shrink-0">
+                          <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                          <span>{formatDate(item.actionDate)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Remarks bubble with faded border */}
+                    {item.remarks && (
+                      <div className="flex items-start gap-2 rounded-lg bg-white border border-slate-100/50 p-2 text-xs text-slate-600 mt-2">
+                        <MessageSquare className="h-3.5 w-3.5 text-slate-400 mt-0.5 shrink-0" />
+                        <span className="italic">"{item.remarks}"</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function MaintenanceHistoryCard({ items }) {
+  return (
+    <Card>
+      <CardHeader title="Maintenance History" subtitle={`${items?.length || 0} maintenance records`} />
+      <div className="p-5">
+        {!items?.length ? (
+          <p className="text-sm text-slate-500 py-4 text-center">No maintenance history recorded yet.</p>
+        ) : (
+          <div className="space-y-3">
+            {items.map((item, index) => {
+              const isCompleted = item.status?.toLowerCase().includes('complete') || item.status?.toLowerCase().includes('finish');
+              const iconBg = isCompleted ? 'bg-emerald-100 text-emerald-600 border-emerald-200' : 'bg-amber-100 text-amber-600 border-amber-200';
+              return (
+                <div key={index} className="flex gap-4 items-center bg-slate-50 border border-slate-100 rounded-xl p-3 hover:bg-slate-100/50 transition-colors">
+                  {/* Icon */}
+                  <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${iconBg}`}>
+                    <Wrench className="h-3.5 w-3.5" />
+                  </span>
+
+                  {/* Content column */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-bold text-slate-900 text-sm">
+                          Vendor:{' '}
+                          {item.vendor?.vendorName ? (
+                            <span className="text-slate-900 font-semibold">{item.vendor.vendorName}</span>
+                          ) : (
+                            <span className="text-slate-400 font-normal italic">Unknown</span>
+                          )}
+                        </span>
+                        {item.vendor?.phone && (
+                          <a href={`tel:${item.vendor.phone}`} className="mt-0.5 flex items-center gap-1 text-xs text-slate-450 hover:text-brand-600 w-fit">
+                            <Phone className="h-3 w-3 text-slate-400" />
+                            <span>{item.vendor.phone}</span>
+                          </a>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <StatusBadge status={item.status} />
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded-lg shrink-0">
+                          <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                          <span>{formatDate(item.actionDate)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Remarks bubble with faded border */}
+                    {item.remarks && (
+                      <div className="flex items-start gap-2 rounded-lg bg-white border border-slate-100/50 p-2 text-xs text-slate-600 mt-2">
+                        <MessageSquare className="h-3.5 w-3.5 text-slate-400 mt-0.5 shrink-0" />
+                        <span className="italic">"{item.remarks}"</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </Card>
